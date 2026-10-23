@@ -1,0 +1,3 @@
+*.fpk
+package/app/bin/script-tasks
+data/

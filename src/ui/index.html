@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>脚本定时任务</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --blue:#2563eb; --blue-dark:#1d4ed8; --ink:#1f2733; --sub:#68707d;
+    --line:#e4e8ef; --bg:#f3f5f9; --card:#fff; --ok:#16a34a; --bad:#dc2626;
+    --warn:#d97706; --run:#2563eb; --radius:14px;
+  }
+  body { font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:1080px; margin:0 auto; padding:28px 20px 60px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:22px; }
+  .logo { width:46px; height:46px; border-radius:12px; background:var(--blue); display:flex; align-items:center; justify-content:center; flex:none; }
+  .logo svg { width:26px; height:26px; stroke:#fff; }
+  h1 { font-size:22px; font-weight:600; }
+  .subtitle { color:var(--sub); font-size:13px; margin-top:2px; }
+  .spacer { flex:1; }
+  button { font:inherit; cursor:pointer; border:none; background:none; color:inherit; }
+  .btn { padding:9px 18px; border-radius:10px; font-size:14px; transition:.15s; }
+  .btn-primary { background:var(--blue); color:#fff; }
+  .btn-primary:hover { background:var(--blue-dark); }
+  .btn-ghost { border:1px solid var(--line); background:#fff; }
+  .btn-ghost:hover { border-color:#c4ccd9; }
+  .btn-danger { color:var(--bad); border:1px solid #f0d4d4; background:#fff; }
+  .btn-danger:hover { background:#fdf2f2; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+
+  #drop { border:1.5px dashed #c9d3e4; border-radius:var(--radius); padding:16px; text-align:center; color:var(--sub); font-size:13.5px; margin-bottom:18px; background:#fbfcfe; transition:.15s; }
+  #drop.over { border-color:var(--blue); color:var(--blue); background:#eff4fe; }
+
+  .task { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:12px; display:flex; align-items:center; gap:16px; }
+  .task-main { flex:1; min-width:0; }
+  .task-name { font-size:15.5px; font-weight:600; display:flex; align-items:center; gap:9px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#c3cad4; flex:none; }
+  .dot.on { background:var(--ok); }
+  .dot.running { background:var(--run); animation:pulse 1.1s infinite; }
+  @keyframes pulse { 50% { opacity:.35; } }
+  .task-remark { color:var(--sub); font-size:13px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .task-meta { color:var(--sub); font-size:12.5px; margin-top:6px; display:flex; gap:16px; flex-wrap:wrap; }
+  .chip { font-size:12px; padding:2px 9px; border-radius:99px; font-weight:500; }
+  .chip-ok { background:#e8f7ee; color:var(--ok); }
+  .chip-bad { background:#fdeeee; color:var(--bad); }
+  .chip-warn { background:#fdf3e3; color:var(--warn); }
+  .chip-run { background:#e8effd; color:var(--run); }
+  .chip-none { background:#eef1f5; color:var(--sub); }
+  .actions { display:flex; align-items:center; gap:8px; flex:none; }
+  .act { padding:7px 13px; border-radius:9px; font-size:13px; border:1px solid var(--line); background:#fff; }
+  .act:hover { border-color:#c4ccd9; }
+  .act.run { color:var(--blue); border-color:#c7d6f8; }
+  .act:disabled { opacity:.45; cursor:not-allowed; }
+
+  .switch { position:relative; width:42px; height:24px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .track { position:absolute; inset:0; background:#d3d9e2; border-radius:99px; transition:.18s; cursor:pointer; }
+  .track:before { content:""; position:absolute; width:18px; height:18px; border-radius:50%; background:#fff; top:3px; left:3px; transition:.18s; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+  .switch input:checked + .track { background:var(--ok); }
+  .switch input:checked + .track:before { transform:translateX(18px); }
+
+  .empty { text-align:center; color:var(--sub); padding:52px 0; font-size:14.5px; }
+
+  .mask { position:fixed; inset:0; background:rgba(23,30,42,.45); display:none; align-items:flex-start; justify-content:center; overflow:auto; padding:40px 16px; z-index:50; }
+  .mask.show { display:flex; }
+  .modal { background:#fff; border-radius:16px; width:640px; max-width:100%; padding:24px 26px; box-shadow:0 18px 50px rgba(10,20,40,.25); }
+  .modal h2 { font-size:17px; margin-bottom:18px; }
+  .field { margin-bottom:16px; }
+  .field label { display:block; font-size:13px; color:var(--sub); margin-bottom:7px; }
+  .hint { font-size:12px; color:var(--sub); margin-top:6px; line-height:1.6; }
+  input[type=text], input[type=number], input[type=time], select, textarea {
+    width:100%; padding:10px 12px; border:1.5px solid var(--line); border-radius:10px; font:inherit; font-size:14px; background:#fff; outline:none; transition:.15s;
+  }
+  input:focus, select:focus, textarea:focus { border-color:var(--blue); box-shadow:0 0 0 3.5px rgba(37,99,235,.14); }
+  textarea { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; line-height:1.55; resize:vertical; }
+  textarea.plain { font-family:inherit; }
+  .row { display:flex; gap:12px; }
+  .row > * { flex:1; }
+  .tabs { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  .tab { padding:7px 14px; border-radius:99px; border:1px solid var(--line); font-size:13px; background:#fff; }
+  .tab.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .week { display:flex; gap:6px; }
+  .week button { flex:1; padding:8px 0; border:1px solid var(--line); border-radius:9px; font-size:13px; background:#fff; }
+  .week button.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .cronline { font-family:ui-monospace,Menlo,monospace; font-size:13px; background:#f2f5fa; border-radius:9px; padding:9px 12px; display:flex; justify-content:space-between; gap:10px; }
+  .preview { font-size:12.5px; color:var(--sub); margin-top:8px; line-height:1.7; }
+  .adv { border:1px solid var(--line); border-radius:12px; padding:4px 16px 8px; margin-bottom:16px; }
+  .adv summary { cursor:pointer; font-size:13.5px; font-weight:600; padding:10px 0; list-style:none; }
+  .adv summary::-webkit-details-marker { display:none; }
+  .adv summary:after { content:"展开"; float:right; color:var(--sub); font-weight:400; font-size:12.5px; }
+  .adv[open ] summary:after { content:"收起"; }
+  .modal-foot { display:flex; justify-content:space-between; align-items:center; margin-top:20px; }
+  .modal-foot .right { display:flex; gap:10px; }
+  .runs-item { display:flex; align-items:center; gap:12px; padding:10px 6px; border-bottom:1px solid #eef1f5; font-size:13.5px; cursor:pointer; border-radius:8px; }
+  .runs-item:hover { background:#f6f9ff; }
+  .runs-item .grow { flex:1; }
+  .runs-item .dim { color:var(--sub); font-size:12.5px; }
+  pre.log { background:#0e1522; color:#c9e2c9; border-radius:12px; padding:16px; font-size:12.5px; line-height:1.6; max-height:55vh; overflow:auto; white-space:pre-wrap; word-break:break-all; user-select:text; -webkit-user-select:text; cursor:text; }
+  #toast { position:fixed; top:22px; left:50%; transform:translate(-50%,-16px); background:#1f2733; color:#fff; padding:10px 22px; border-radius:99px; font-size:14px; opacity:0; pointer-events:none; transition:.22s; z-index:99; }
+  #toast.show { opacity:1; transform:translate(-50%,0); }
+  @media (max-width:640px){ .task{ flex-wrap:wrap; } .actions{ width:100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></div>
+    <div>
+      <h1>脚本定时任务</h1>
+      <div class="subtitle">脚本文件、命令、HTTP 请求，图形化设置执行周期，到点自动运行</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost" id="btnSettings">设置</button>
+    <button class="btn btn-ghost" id="btnUpload">上传脚本</button>
+    <button class="btn btn-primary" id="btnNew">新建任务</button>
+    <input type="file" id="fileInput" accept=".sh,.py" hidden>
+  </header>
+
+  <div id="drop">把 .sh / .py 文件拖到这里也可以上传</div>
+  <div id="list"></div>
+  <div class="empty" id="empty" style="display:none">还没有任务，新建一个开始吧</div>
+</div>
+
+<!-- 新建任务弹窗 -->
+<div class="mask" id="newMask">
+  <div class="modal">
+    <h2>新建任务</h2>
+    <div class="tabs" id="newTypeTabs">
+      <button class="tab on" data-ttype="script">脚本文件</button>
+      <button class="tab" data-ttype="command">命令</button>
+      <button class="tab" data-ttype="http">HTTP 请求</button>
+    </div>
+    <div id="np-script">
+      <div class="field"><label>脚本名称</label><input type="text" id="nName" placeholder="如 backup.sh 或 check.py（省略后缀默认 .sh）"></div>
+      <div class="field"><label>备注</label><input type="text" id="nRemark" placeholder="这个脚本是干什么的"></div>
+      <div class="field"><label>脚本内容</label><textarea id="nContent" rows="10" spellcheck="false">#!/bin/bash
+
+</textarea></div>
+    </div>
+    <div id="np-command" style="display:none">
+      <div class="field"><label>任务名称</label><input type="text" id="ncName" placeholder="如 清理缓存"></div>
+      <div class="field"><label>备注</label><input type="text" id="ncRemark" placeholder="这条命令是干什么的"></div>
+      <div class="field"><label>命令（以 bash 执行）</label><textarea id="ncCommand" rows="5" spellcheck="false" placeholder="如 docker system prune -f"></textarea></div>
+    </div>
+    <div id="np-http" style="display:none">
+      <div class="field"><label>任务名称</label><input type="text" id="nhName" placeholder="如 触发同步接口"></div>
+      <div class="field"><label>备注</label><input type="text" id="nhRemark" placeholder="这个请求是干什么的"></div>
+      <div class="row">
+        <div style="flex:0 0 130px"><label>方法</label><select id="nhMethod"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>HEAD</option><option>PATCH</option></select></div>
+        <div><label>URL</label><input type="text" id="nhUrl" placeholder="https://example.com/api/run"></div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="field"><label>请求头（每行一个 Key: Value，可空）</label><textarea id="nhHeaders" rows="3" spellcheck="false" placeholder="Authorization: Bearer xxx"></textarea></div>
+      <div class="field"><label>请求体（可空，GET/HEAD 不发送）</label><textarea id="nhBody" rows="4" spellcheck="false"></textarea></div>
+      <div class="hint">返回 2xx 视为成功，其余视为失败。响应内容会记进运行日志（上限 64KB）。</div>
+    </div>
+    <div class="modal-foot">
+      <span></span>
+      <div class="right">
+        <button class="btn btn-ghost" id="btnNewCancel">取消</button>
+        <button class="btn btn-primary" id="btnNewSave">创建</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑弹窗 -->
+<div class="mask" id="editMask">
+  <div class="modal">
+    <h2 id="editTitle">编辑任务</h2>
+    <div class="field"><label id="fNameLabel">脚本名称</label><input type="text" id="fName"></div>
+    <div class="field"><label>备注</label><input type="text" id="fRemark" placeholder="这个任务是干什么的"></div>
+    <div id="ef-script" class="field">
+      <label>脚本内容</label>
+      <textarea id="fContent" rows="10" spellcheck="false"></textarea>
+    </div>
+    <div id="ef-command" class="field" style="display:none">
+      <label>命令（以 bash 执行）</label>
+      <textarea id="fCommand" rows="5" spellcheck="false"></textarea>
+    </div>
+    <div id="ef-http" style="display:none">
+      <div class="row">
+        <div style="flex:0 0 130px"><label>方法</label><select id="fMethod"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>HEAD</option><option>PATCH</option></select></div>
+        <div><label>URL</label><input type="text" id="fUrl"></div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="field"><label>请求头（每行一个 Key: Value，可空）</label><textarea id="fHeaders" rows="3" spellcheck="false"></textarea></div>
+      <div class="field"><label>请求体（可空，GET/HEAD 不发送）</label><textarea id="fBody" rows="4" spellcheck="false"></textarea></div>
+    </div>
+    <div class="field">
+      <label>执行周期</label>
+      <div class="tabs" id="modeTabs">
+        <button class="tab" data-mode="interval">间隔</button>
+        <button class="tab" data-mode="daily">每天</button>
+        <button class="tab" data-mode="weekly">每周</button>
+        <button class="tab" data-mode="monthly">每月</button>
+        <button class="tab" data-mode="custom">自定义</button>
+      </div>
+      <div id="pane-interval" class="pane">
+        <div class="row">
+          <div><label>每隔</label><input type="number" id="ivNum" min="1" value="30"></div>
+          <div><label>单位</label><select id="ivUnit"><option value="m">分钟</option><option value="h">小时</option></select></div>
+        </div>
+      </div>
+      <div id="pane-daily" class="pane" style="display:none">
+        <label>时间</label><input type="time" id="dTime" value="03:00">
+      </div>
+      <div id="pane-weekly" class="pane" style="display:none">
+        <label>星期</label>
+        <div class="week" id="weekBtns"></div>
+        <div style="height:10px"></div>
+        <label>时间</label><input type="time" id="wTime" value="03:00">
+      </div>
+      <div id="pane-monthly" class="pane" style="display:none">
+        <div class="row">
+          <div><label>每月几号</label><input type="number" id="moDay" min="1" max="31" value="1"></div>
+          <div><label>时间</label><input type="time" id="moTime" value="03:00"></div>
+        </div>
+      </div>
+      <div id="pane-custom" class="pane" style="display:none">
+        <label>cron 表达式（5 段：分 时 日 月 周；或 6 段：秒 分 时 日 月 周）</label><input type="text" id="cuCron" placeholder="0 3 * * *">
+      </div>
+      <div style="height:12px"></div>
+      <div class="cronline"><span id="cronText"></span><span id="cronHuman" style="color:var(--sub)"></span></div>
+      <div class="preview" id="cronPreview"></div>
+    </div>
+    <details class="adv" id="advBox">
+      <summary>高级设置</summary>
+      <div class="row" style="margin-top:6px">
+        <div><label>失败后重试次数（0-5）</label><input type="number" id="aRetry" min="0" max="5" value="0"></div>
+        <div><label>重试间隔（秒）</label><input type="number" id="aRetryIv" min="1" max="3600" value="30"></div>
+        <div><label>超时（分钟，0=不限）</label><input type="number" id="aTimeout" min="0" max="1440" value="0"></div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="field" style="margin-bottom:6px">
+        <label>运行成功后，接着运行</label>
+        <select id="aNext"><option value="">（无）</option></select>
+        <div class="hint">链式运行不受对方启用开关影响；成环时自动跳过，防死循环。</div>
+      </div>
+    </details>
+    <div class="modal-foot">
+      <button class="btn btn-danger" id="btnDelete">删除任务</button>
+      <div class="right">
+        <button class="btn btn-ghost" id="btnEditCancel">取消</button>
+        <button class="btn btn-primary" id="btnEditSave">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 运行记录弹窗 -->
+<div class="mask" id="runsMask">
+  <div class="modal">
+    <h2 id="runsTitle">运行记录</h2>
+    <div id="runsList"></div>
+    <div id="logView" style="display:none">
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-bottom:10px">
+        <button class="btn btn-danger" id="btnStopRun" style="display:none">停止运行</button>
+        <button class="btn btn-ghost" id="btnCopyLog">复制日志</button>
+      </div>
+      <pre class="log" id="logText"></pre>
+    </div>
+    <div class="modal-foot">
+      <span></span>
+      <div class="right">
+        <button class="btn btn-ghost" id="btnRunsBack" style="display:none">返回记录</button>
+        <button class="btn btn-primary" id="btnRunsClose">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 设置弹窗 -->
+<div class="mask" id="setMask">
+  <div class="modal">
+    <h2>设置</h2>
+    <div class="field">
+      <label>运行日志保留天数</label>
+      <input type="number" id="sKeepDays" min="1" max="3650" value="30">
+      <div class="hint">超过保留天数的日志文件会被自动删除（每个任务另有最近 30 份的上限）。运行记录条目保留， 只是日志内容会被清掉。</div>
+    </div>
+    <div class="modal-foot">
+      <span></span>
+      <div class="right">
+        <button class="btn btn-ghost" id="btnSetCancel">取消</button>
+        <button class="btn btn-primary" id="btnSetSave">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let tasks = [];
+let editing = null; // 正在编辑的任务
+let mode = 'daily';
+let weekSel = new Set([1]);
+let newType = 'script';
+
+function esc(s){ return String(s??'').replace(/[&<>"']/g, c=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2200); }
+function pad(n){ return String(n).padStart(2,'0'); }
+function fmtTime(ms){ if(!ms) return '—'; const d=new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function fmtTimeS(ms){ if(!ms) return '—'; const d=new Date(ms); return `${fmtTime(ms)}:${pad(d.getSeconds())}`; }
+function fmtDur(a,b){ if(!b) return ''; let s=Math.max(0,Math.round((b-a)/1000)); if(s<60) return s+'秒'; if(s<3600) return Math.floor(s/60)+'分'+(s%60)+'秒'; return Math.floor(s/3600)+'时'+Math.floor(s%3600/60)+'分'; }
+function trigName(x){ return x==='manual'?'手动':(x==='chain'?'链式':'定时'); }
+
+function humanCron(c){
+  const p=c.trim().split(/\s+/);
+  if(p.length===6) return '自定义（含秒）';
+  if(p.length!==5) return c;
+  const [mi,h,dom,mon,dow]=p;
+  const t=`${h.padStart(2,'0')}:${mi.padStart(2,'0')}`;
+  let m;
+  if(m=mi.match(/^\*\/(\d+)$/)&&h==='*') return `每 ${m[1]} 分钟`;
+  if(mi==='0'&&(m=h.match(/^\*\/(\d+)$/))) return `每 ${m[1]} 小时`;
+  if(dom==='*'&&mon==='*'&&dow==='*'&&/^\d+$/.test(mi)&&/^\d+$/.test(h)) return `每天 ${t}`;
+  if(dom==='*'&&mon==='*'&&/^\d+$/.test(mi)&&/^\d+$/.test(h)){
+    const names=['日','一','二','三','四','五','六'];
+    const days=dow.split(',').map(x=>{const n=parseInt(x)%7; return '周'+names[n];}).join('、');
+    return `每${days} ${t}`;
+  }
+  if(mon==='*'&&dow==='*'&&/^\d+$/.test(dom)&&/^\d+$/.test(mi)&&/^\d+$/.test(h)) return `每月 ${dom} 号 ${t}`;
+  if(c==='* * * * *') return '每分钟';
+  return c;
+}
+
+function typeChip(t){
+  if(t.type==='command') return '<span class="chip chip-run" style="font-size:11px">命令</span>';
+  if(t.type==='http') return '<span class="chip chip-run" style="font-size:11px">HTTP</span>';
+  return `<span class="chip ${t.name.endsWith('.py')?'chip-run':'chip-none'}" style="font-size:11px">${t.name.endsWith('.py')?'PY':'SH'}</span>`;
+}
+
+function lastChip(t){
+  if(t.running) return '<span class="chip chip-run">运行中</span>';
+  if(t.lastExit===-999) return '<span class="chip chip-none">未运行过</span>';
+  if(t.lastExit===0) return '<span class="chip chip-ok">上次成功</span>';
+  if(t.lastExit===-1) return '<span class="chip chip-bad">上次超时</span>';
+  if(t.lastExit===-3) return '<span class="chip chip-warn">上次被停止</span>';
+  return `<span class="chip chip-bad">上次失败 · 退出码 ${t.lastExit}</span>`;
+}
+
+function taskById(id){ return tasks.find(x=>x.id===id); }
+
+async function load(){
+  const res = await fetch('api/tasks'); tasks = await res.json();
+  const list = $('#list'); list.innerHTML='';
+  $('#empty').style.display = tasks.length? 'none':'block';
+  for(const t of tasks){
+    const next = t.nextTaskId? taskById(t.nextTaskId): null;
+    const el = document.createElement('div'); el.className='task';
+    el.innerHTML = `
+      <div class="task-main">
+        <div class="task-name"><span class="dot ${t.running?'running':(t.enabled?'on':'')}"></span>${esc(t.name)} ${typeChip(t)}</div>
+        ${t.remark?`<div class="task-remark">${esc(t.remark)}</div>`:''}
+        <div class="task-meta">
+          <span>${esc(humanCron(t.cron))}</span>
+          <span>下次 ${t.enabled? fmtTime(t.nextRun):'已停用'}</span>
+          <span>上次 ${fmtTime(t.lastRunAt)}</span>
+          ${next?`<span>成功后 → ${esc(next.name)}</span>`:''}
+          ${lastChip(t)}
+        </div>
+      </div>
+      <label class="switch"><input type="checkbox" ${t.enabled?'checked':''} data-act="toggle"><span class="track"></span></label>
+      <div class="actions">
+        <button class="act run" data-act="run" ${t.running?'disabled':''}>运行</button>
+        <button class="act" data-act="edit">编辑</button>
+        <button class="act" data-act="runs">记录</button>
+      </div>`;
+    el.querySelector('[data-act=toggle]').addEventListener('change', async e=>{
+      await api(`api/tasks/${t.id}`, 'PUT', {enabled: e.target.checked});
+      toast(e.target.checked? '已启用':'已停用'); load();
+    });
+    el.querySelector('[data-act=run]').addEventListener('click', async ()=>{
+      const r = await api(`api/tasks/${t.id}/run`, 'POST', {});
+      if(r.error) toast(r.error); else { toast('已开始运行'); setTimeout(load, 600); }
+    });
+    el.querySelector('[data-act=edit]').addEventListener('click', ()=>openEdit(t));
+    el.querySelector('[data-act=runs]').addEventListener('click', ()=>openRuns(t));
+    list.appendChild(el);
+  }
+}
+
+async function api(url, method, body){
+  const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: body? JSON.stringify(body): undefined});
+  try { return await res.json(); } catch { return {}; }
+}
+
+// ---------- 上传 ----------
+$('#btnUpload').addEventListener('click', ()=> $('#fileInput').click());
+$('#fileInput').addEventListener('change', async e=>{
+  if(e.target.files.length) await uploadFile(e.target.files[0]);
+  e.target.value='';
+});
+async function uploadFile(f){
+  const fd = new FormData(); fd.append('file', f);
+  const res = await fetch('api/tasks/upload', {method:'POST', body: fd});
+  const r = await res.json();
+  if(r.error) toast(r.error); else { toast('上传成功：'+f.name); load(); }
+}
+const drop = $('#drop');
+['dragover','dragenter'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e=>{ const f=e.dataTransfer.files[0]; if(f) uploadFile(f); });
+
+// ---------- 新建 ----------
+document.querySelectorAll('#newTypeTabs .tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    newType = tab.dataset.ttype;
+    document.querySelectorAll('#newTypeTabs .tab').forEach(x=> x.classList.toggle('on', x===tab));
+    ['script','command','http'].forEach(k=> $('#np-'+k).style.display = k===newType? 'block':'none');
+  });
+});
+$('#btnNew').addEventListener('click', ()=>{
+  $('#nName').value=''; $('#nRemark').value=''; $('#nContent').value='#!/bin/bash\n\n';
+  $('#ncName').value=''; $('#ncRemark').value=''; $('#ncCommand').value='';
+  $('#nhName').value=''; $('#nhRemark').value=''; $('#nhUrl').value=''; $('#nhHeaders').value=''; $('#nhBody').value=''; $('#nhMethod').value='GET';
+  $('#newMask').classList.add('show');
+});
+$('#btnNewCancel').addEventListener('click', ()=> $('#newMask').classList.remove('show'));
+$('#btnNewSave').addEventListener('click', async ()=>{
+  let payload;
+  if(newType==='script'){
+    const name = $('#nName').value.trim();
+    if(!name){ toast('先填脚本名称'); return; }
+    let content = $('#nContent').value;
+    if(name.endsWith('.py')) content = content.replace('#!/bin/bash', '#!/usr/bin/env python3');
+    payload = {type:'script', name, content, remark: $('#nRemark').value};
+  } else if(newType==='command'){
+    const name = $('#ncName').value.trim();
+    if(!name){ toast('先填任务名称'); return; }
+    if(!$('#ncCommand').value.trim()){ toast('先填命令'); return; }
+    payload = {type:'command', name, command: $('#ncCommand').value, remark: $('#ncRemark').value};
+  } else {
+    const name = $('#nhName').value.trim();
+    if(!name){ toast('先填任务名称'); return; }
+    if(!$('#nhUrl').value.trim()){ toast('先填 URL'); return; }
+    payload = {type:'http', name, method: $('#nhMethod').value, url: $('#nhUrl').value.trim(),
+      headers: $('#nhHeaders').value, body: $('#nhBody').value, remark: $('#nhRemark').value};
+  }
+  const r = await api('api/tasks', 'POST', payload);
+  if(r.error){ toast(r.error); return; }
+  toast('已创建（默认停用，去列表里设置周期并启用）'); $('#newMask').classList.remove('show'); load();
+});
+
+// ---------- 设置 ----------
+$('#btnSettings').addEventListener('click', async ()=>{
+  const s = await api('api/settings', 'GET');
+  $('#sKeepDays').value = s.logKeepDays || 30;
+  $('#setMask').classList.add('show');
+});
+$('#btnSetCancel').addEventListener('click', ()=> $('#setMask').classList.remove('show'));
+$('#btnSetSave').addEventListener('click', async ()=>{
+  const v = parseInt($('#sKeepDays').value);
+  if(!(v>=1 && v<=3650)){ toast('保留天数需在 1..3650 之间'); return; }
+  const r = await api('api/settings', 'PUT', {logKeepDays: v});
+  if(r.error){ toast(r.error); return; }
+  toast('已保存'); $('#setMask').classList.remove('show');
+});
+
+// ---------- 编辑 ----------
+const weekNames=['日','一','二','三','四','五','六'];
+const weekBtns = $('#weekBtns');
+weekNames.forEach((n,i)=>{
+  const b=document.createElement('button'); b.textContent=n; b.dataset.day=i;
+  b.addEventListener('click', ()=>{ weekSel.has(i)? weekSel.delete(i): weekSel.add(i); if(!weekSel.size) weekSel.add(i); paintWeek(); syncCronFromUI(); });
+  weekBtns.appendChild(b);
+});
+function paintWeek(){ [...weekBtns.children].forEach(b=> b.classList.toggle('on', weekSel.has(+b.dataset.day))); }
+
+document.querySelectorAll('#modeTabs .tab').forEach(tab=>{
+  tab.addEventListener('click', ()=> setMode(tab.dataset.mode, true));
+});
+function setMode(m, fromUser){
+  mode=m;
+  document.querySelectorAll('#modeTabs .tab').forEach(t=> t.classList.toggle('on', t.dataset.mode===m));
+  document.querySelectorAll('.pane').forEach(p=> p.style.display='none');
+  $('#pane-'+m).style.display='block';
+  if(fromUser) syncCronFromUI();
+}
+
+function buildCron(){
+  if(mode==='interval'){
+    const n=Math.max(1, parseInt($('#ivNum').value)||1);
+    return $('#ivUnit').value==='m'? `*/${n} * * * *` : `0 */${n} * * *`;
+  }
+  if(mode==='daily'){ const [h,mi]=$('#dTime').value.split(':'); return `${+mi} ${+h} * * *`; }
+  if(mode==='weekly'){ const [h,mi]=$('#wTime').value.split(':'); const days=[...weekSel].sort().join(','); return `${+mi} ${+h} * * ${days}`; }
+  if(mode==='monthly'){ const [h,mi]=$('#moTime').value.split(':'); const d=Math.min(31, Math.max(1, parseInt($('#moDay').value)||1)); return `${+mi} ${+h} ${d} * *`; }
+  return $('#cuCron').value.trim();
+}
+
+async function syncCronFromUI(){
+  const cron = buildCron();
+  $('#cronText').textContent = cron;
+  $('#cronHuman').textContent = humanCron(cron);
+  const res = await fetch('api/cron/preview?expr='+encodeURIComponent(cron));
+  const r = await res.json();
+  if(r.error){ $('#cronPreview').textContent = '⚠ '+r.error; return; }
+  $('#cronPreview').innerHTML = '接下来五次：<br>' + (r.next.length? r.next.map(fmtTimeS).join('<br>') : '无');
+}
+['ivNum','ivUnit','dTime','wTime','moDay','moTime','cuCron'].forEach(id=>{
+  $('#'+id).addEventListener('input', syncCronFromUI);
+  $('#'+id).addEventListener('change', syncCronFromUI);
+});
+
+// 把已有 cron 反推回图形模式(能推就推, 推不出落到自定义)
+function inferMode(cron){
+  const p=cron.trim().split(/\s+/);
+  if(p.length!==5){ setMode('custom'); $('#cuCron').value=cron; return; }
+  const [mi,h,dom,mon,dow]=p; let m;
+  if(mon==='*'&&dom==='*'&&dow==='*'){
+    if(m=mi.match(/^\*\/(\d+)$/)&&h==='*'){ setMode('interval'); $('#ivUnit').value='m'; $('#ivNum').value=m[1]; return; }
+    if(mi==='0'&&(m=h.match(/^\*\/(\d+)$/))){ setMode('interval'); $('#ivUnit').value='h'; $('#ivNum').value=m[1]; return; }
+    if(/^\d+$/.test(mi)&&/^\d+$/.test(h)){ setMode('daily'); $('#dTime').value=`${h.padStart(2,'0')}:${mi.padStart(2,'0')}`; return; }
+  }
+  if(mon==='*'&&dom==='*'&&/^\d+$/.test(mi)&&/^\d+$/.test(h)&&/^[\d,]+$/.test(dow)){
+    setMode('weekly'); weekSel=new Set(dow.split(',').map(x=>parseInt(x)%7)); paintWeek();
+    $('#wTime').value=`${h.padStart(2,'0')}:${mi.padStart(2,'0')}`; return;
+  }
+  if(mon==='*'&&dow==='*'&&/^\d+$/.test(dom)&&/^\d+$/.test(mi)&&/^\d+$/.test(h)){
+    setMode('monthly'); $('#moDay').value=dom; $('#moTime').value=`${h.padStart(2,'0')}:${mi.padStart(2,'0')}`; return;
+  }
+  setMode('custom'); $('#cuCron').value=cron;
+}
+
+async function openEdit(t){
+  editing=t;
+  $('#editTitle').textContent='编辑任务 · '+t.name;
+  $('#fNameLabel').textContent = t.type==='script'? '脚本名称':'任务名称';
+  $('#fName').value=t.name;
+  $('#fRemark').value=t.remark||'';
+  $('#ef-script').style.display = t.type==='script'? 'block':'none';
+  $('#ef-command').style.display = t.type==='command'? 'block':'none';
+  $('#ef-http').style.display = t.type==='http'? 'block':'none';
+  if(t.type==='script'){
+    const r = await api(`api/tasks/${t.id}/content`, 'GET');
+    $('#fContent').value = r.content||'';
+  }
+  if(t.type==='command') $('#fCommand').value = t.command||'';
+  if(t.type==='http'){
+    $('#fMethod').value = t.method||'GET'; $('#fUrl').value = t.url||'';
+    $('#fHeaders').value = t.headers||''; $('#fBody').value = t.body||'';
+  }
+  $('#aRetry').value = t.retry||0;
+  $('#aRetryIv').value = t.retryInterval||30;
+  $('#aTimeout').value = Math.round((t.timeoutSec||0)/60);
+  const sel = $('#aNext'); sel.innerHTML = '<option value="">（无）</option>';
+  for(const x of tasks){
+    if(x.id===t.id) continue;
+    const o=document.createElement('option'); o.value=x.id; o.textContent=x.name;
+    if(x.id===t.nextTaskId) o.selected=true;
+    sel.appendChild(o);
+  }
+  $('#advBox').open = false;
+  disarmDelete();
+  inferMode(t.cron);
+  syncCronFromUI();
+  $('#editMask').classList.add('show');
+}
+$('#btnEditCancel').addEventListener('click', ()=> $('#editMask').classList.remove('show'));
+$('#btnEditSave').addEventListener('click', async ()=>{
+  const cron = buildCron();
+  const chk = await fetch('api/cron/preview?expr='+encodeURIComponent(cron)).then(x=>x.json());
+  if(chk.error){ toast(chk.error); return; }
+  const payload = {
+    name: $('#fName').value.trim(), remark: $('#fRemark').value, cron,
+    retry: Math.max(0, Math.min(5, parseInt($('#aRetry').value)||0)),
+    retryInterval: Math.max(1, parseInt($('#aRetryIv').value)||30),
+    timeoutSec: Math.max(0, parseInt($('#aTimeout').value)||0)*60,
+    nextTaskId: $('#aNext').value,
+  };
+  if(editing.type==='command') payload.command = $('#fCommand').value;
+  if(editing.type==='http'){ payload.method = $('#fMethod').value; payload.url = $('#fUrl').value.trim(); payload.headers = $('#fHeaders').value; payload.body = $('#fBody').value; }
+  const r1 = await api(`api/tasks/${editing.id}`, 'PUT', payload);
+  if(r1.error){ toast(r1.error); return; }
+  if(editing.type==='script'){
+    const r2 = await api(`api/tasks/${editing.id}/content`, 'PUT', {content: $('#fContent').value});
+    if(r2.error){ toast(r2.error); return; }
+  }
+  toast('已保存'); $('#editMask').classList.remove('show'); load();
+});
+let deleteArmed=false, deleteTimer=null;
+function disarmDelete(){
+  deleteArmed=false;
+  const b=$('#btnDelete'); b.textContent='删除任务'; b.style.background=''; b.style.color='';
+  if(deleteTimer) clearTimeout(deleteTimer);
+}
+$('#btnDelete').addEventListener('click', async ()=>{
+  const b=$('#btnDelete');
+  if(!deleteArmed){
+    deleteArmed=true;
+    b.textContent='再点一次确认删除'; b.style.background='#dc2626'; b.style.color='#fff';
+    deleteTimer=setTimeout(disarmDelete, 3000);
+    return;
+  }
+  disarmDelete();
+  const r = await api(`api/tasks/${editing.id}`, 'DELETE');
+  if(r.error) toast(r.error); else { toast('已删除'); $('#editMask').classList.remove('show'); load(); }
+});
+$('#btnCopyLog').addEventListener('click', async ()=>{
+  const text=$('#logText').textContent;
+  try { await navigator.clipboard.writeText(text); toast('日志已复制'); return; } catch(e) {}
+  const ta=document.createElement('textarea');
+  ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast('日志已复制'); } catch(e) { toast('复制失败, 请手动选中复制'); }
+  ta.remove();
+});
+
+// ---------- 运行记录(支持实时日志与停止) ----------
+let runsTask=null, runsTimer=null, logTimer=null, logRun=null;
+function runChip(run){
+  if(run.endAt===0) return '<span class="chip chip-run">运行中</span>';
+  if(run.exitCode===0) return '<span class="chip chip-ok">成功</span>';
+  if(run.exitCode===-1) return '<span class="chip chip-bad">超时</span>';
+  if(run.exitCode===-3) return '<span class="chip chip-warn">已停止</span>';
+  return `<span class="chip chip-bad">失败 ${run.exitCode}</span>`;
+}
+async function renderRuns(){
+  if(!runsTask) return;
+  const res = await fetch('api/runs?taskId='+runsTask.id); const list = await res.json();
+  const box = $('#runsList'); box.innerHTML = list.length? '' : '<div class="empty">还没有运行记录</div>';
+  for(const run of list){
+    const el=document.createElement('div'); el.className='runs-item';
+    el.innerHTML = `<div class="grow">${fmtTime(run.startAt)}<div class="dim">${trigName(run.trigger)} · 耗时 ${fmtDur(run.startAt, run.endAt)}</div></div>${runChip(run)}<span class="dim">日志 ›</span>`;
+    el.addEventListener('click', ()=> openLog(run));
+    box.appendChild(el);
+  }
+  // 正在看的日志若已结束, 停掉实时轮询并收尾刷新
+  if(logRun && !list.some(x=>x.id===logRun.id && x.endAt===0)){
+    stopLogPoll();
+    $('#btnStopRun').style.display='none';
+  }
+}
+async function openLog(run){
+  logRun = run;
+  $('#runsList').style.display='none'; $('#logView').style.display='block'; $('#btnRunsBack').style.display='inline-block';
+  $('#btnStopRun').style.display = run.endAt===0? 'inline-block':'none';
+  await refreshLog();
+  stopLogPoll();
+  if(run.endAt===0){
+    logTimer = setInterval(refreshLog, 1000);
+  }
+}
+async function refreshLog(){
+  if(!logRun) return;
+  const pre = $('#logText');
+  const nearBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 60;
+  const res = await fetch(`api/runs/${logRun.id}/log`);
+  pre.textContent = await res.text();
+  if(nearBottom) pre.scrollTop = pre.scrollHeight;
+}
+function stopLogPoll(){ if(logTimer){ clearInterval(logTimer); logTimer=null; } }
+$('#btnStopRun').addEventListener('click', async ()=>{
+  if(!logRun) return;
+  const r = await api(`api/runs/${logRun.id}/stop`, 'POST', {});
+  if(r.error) toast(r.error); else toast('已发送停止');
+});
+async function openRuns(t){
+  runsTask=t;
+  $('#runsTitle').textContent='运行记录 · '+t.name;
+  $('#logView').style.display='none'; $('#runsList').style.display='block'; $('#btnRunsBack').style.display='none';
+  logRun=null; stopLogPoll();
+  await renderRuns();
+  $('#runsMask').classList.add('show');
+  if(runsTimer) clearInterval(runsTimer);
+  runsTimer = setInterval(()=>{ if(runsTask) renderRuns(); }, 2500);
+}
+function closeRuns(){
+  $('#runsMask').classList.remove('show');
+  if(runsTimer){ clearInterval(runsTimer); runsTimer=null; }
+  stopLogPoll(); runsTask=null; logRun=null;
+  load();
+}
+$('#btnRunsBack').addEventListener('click', ()=>{ stopLogPoll(); logRun=null; $('#logView').style.display='none'; $('#runsList').style.display='block'; $('#btnRunsBack').style.display='none'; renderRuns(); });
+$('#btnRunsClose').addEventListener('click', closeRuns);
+// 弹窗只能通过按钮关闭, 点遮罩不关 —— 防误触丢掉正在编辑的内容
+
+paintWeek();
+load();
+setInterval(()=>{ if(!document.querySelector('.mask.show')) load(); }, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "root"
+    },
+    "username": "script-tasks",
+    "groupname": "script-tasks"
+}
