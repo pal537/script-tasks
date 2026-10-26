@@ -1,11 +1,13 @@
 appname               = script-tasks
-version               = 1.1.0
+version               = 1.2.0
 display_name          = 脚本定时任务
-desc                  = 三种任务: .sh/.py 脚本文件、任意命令、HTTP 请求。图形化设置执行周期(间隔/每天/每周/每月/自定义 cron, 支持 6 段秒级表达式), 到点自动运行; 失败重试、超时终止、防重叠、成功后链式运行、实时日志与手动停止、日志按天自动清理。任务以 root 身份运行, 适合备份、同步、维护类工作。
+desc                  = 三种任务: .sh/.py 脚本文件、任意命令、HTTP 请求，支持备份导出/导入（本地与 NAS 目录）。图形化设置执行周期（间隔/每天/每周/每月/自定义 cron，支持 6 段秒级表达式），到点自动运行，失败重试、超时终止、防重叠、成功后链式运行、实时日志与手动停止、日志按天自动清理。任务以 root 身份运行，适合备份、同步、维护类工作。
 platform              = x86
 source                = thirdparty
-maintainer            = stingeo
-distributor           = stingeo
+maintainer            = pal537
+maintainer_url        = https://github.com/pal537/script-tasks
+distributor           = pal537
+distributor_url       = https://github.com/pal537/script-tasks
 desktop_uidir         = ui
 desktop_applaunchname = script-tasks.Application
 ctl_stop              = true

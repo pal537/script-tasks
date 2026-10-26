@@ -1,6 +1,6 @@
 package main
 
-// script-tasks(脚本定时任务): fnOS 定时任务应用后端 v1.1.0
+// script-tasks(脚本定时任务): fnOS 定时任务应用后端 v1.2.0
 // 任务类型: script(.sh/.py 文件) / command(任意命令) / http(定时 HTTP 请求)
 // 调度: 标准 cron 5 段, 或 6 段(含秒); 图形化周期在前端生成 5 段表达式
 // 执行语义: 失败重试、超时终止、防重叠、成功后链式运行下一个任务
@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -116,6 +117,7 @@ var (
 	dataDir     string
 	scriptsDir  string
 	logsDir     string
+	backupsDir  string
 	stateFile   string
 	runsFile    string
 	settingFile string
@@ -433,6 +435,11 @@ func startRun(t *Task, trigger string) *Run {
 // chain 记录本次链式调用已经过的任务, 防 A→B→A 死循环
 func startRunChain(t *Task, trigger string, chain map[string]bool) *Run {
 	mu.Lock()
+	if findTask(t.ID) != t {
+		// 任务列表已被导入替换, 旧指针的任务已不存在, 不再启动(防导入中途调度的旧任务)
+		mu.Unlock()
+		return nil
+	}
 	if t.Running {
 		mu.Unlock()
 		return nil
@@ -1282,6 +1289,370 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ---------- 备份: 全部任务 + 设置 + 脚本文件(不含运行历史与日志) ----------
+// 备份文件为单个 JSON, 导出到本地(浏览器下载)或 NAS(数据目录下 backups/),
+// 导入支持本地上传与 NAS 目录选取; 导入为整包替换, 先全量校验再落盘。
+
+func backupFileName() string {
+	// 精确到毫秒: 同一秒内连点两次导出也不会互相覆盖
+	return "script-tasks-backup-" + time.Now().Format("20060102-150405.000") + ".json"
+}
+
+type backupScript struct {
+	Name    string `json:"name"`
+	Content string `json:"content"` // base64
+}
+
+type backupFile struct {
+	App            string         `json:"app"`
+	Format         int            `json:"format"`
+	ExportedAt     int64          `json:"exportedAt"`
+	Settings       Settings       `json:"settings"`
+	Tasks          []*Task        `json:"tasks"`
+	Scripts        []backupScript `json:"scripts"`
+	MissingScripts []string       `json:"missingScripts,omitempty"`
+}
+
+func buildBackup() *backupFile {
+	mu.Lock()
+	tasksCopy := make([]*Task, len(tasks))
+	for i, t := range tasks {
+		cp := *t
+		cp.Running = false
+		tasksCopy[i] = &cp
+	}
+	st := settings
+	mu.Unlock()
+	bf := &backupFile{App: "script-tasks", Format: 1, ExportedAt: nowMs(), Settings: st, Tasks: tasksCopy, Scripts: []backupScript{}}
+	for _, t := range tasksCopy {
+		if t.taskType() != TypeScript {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(scriptsDir, t.Name))
+		if err != nil {
+			bf.MissingScripts = append(bf.MissingScripts, t.Name)
+			continue
+		}
+		bf.Scripts = append(bf.Scripts, backupScript{Name: t.Name, Content: base64.StdEncoding.EncodeToString(b)})
+	}
+	return bf
+}
+
+func validateBackup(bf *backupFile) error {
+	if bf.App != "script-tasks" {
+		return fmt.Errorf("不是脚本定时任务的备份文件")
+	}
+	if bf.Format != 1 {
+		return fmt.Errorf("不支持的备份格式")
+	}
+	// 设置值不在此拒绝: 导入时按 loadState 的口径归一(小于 1 取 30、超上限取上限),
+	// 避免可导出的备份因设置值无法导入——与高级设置数值同类问题。
+	ids := map[string]bool{}
+	names := map[string]bool{}
+	for _, t := range bf.Tasks {
+		if t == nil || t.ID == "" {
+			return fmt.Errorf("备份中有任务缺少 ID")
+		}
+		if ids[t.ID] {
+			return fmt.Errorf("备份中有重复任务 ID")
+		}
+		ids[t.ID] = true
+		if names[t.Name] {
+			return fmt.Errorf("备份中有重名任务: %s", t.Name)
+		}
+		names[t.Name] = true
+		switch t.taskType() {
+		case TypeScript:
+			if !validName(t.Name) {
+				return fmt.Errorf("备份中有无效脚本名: %s", t.Name)
+			}
+		case TypeCommand:
+			if !validLabel(t.Name) || strings.TrimSpace(t.Command) == "" {
+				return fmt.Errorf("备份中有无效命令任务: %s", t.Name)
+			}
+		case TypeHTTP:
+			if !validLabel(t.Name) || !validHTTPMethod(t.Method) || !validHTTPURL(strings.TrimSpace(t.URL)) {
+				return fmt.Errorf("备份中有无效 HTTP 任务: %s", t.Name)
+			}
+		}
+		if _, err := parseCron(t.Cron); err != nil {
+			return fmt.Errorf("备份中任务 %s 的 cron 无效: %s", t.Name, err.Error())
+		}
+		// 高级设置数值不在此拒绝: 老版本数据可能含超界值(如重试间隔 0, 运行时与
+		// 编辑表单都按 30 秒处理); 导入时统一归一到现行规则, 见 normalizeAdvanced。
+	}
+	for _, t := range bf.Tasks {
+		if t.NextTaskID != "" && !ids[t.NextTaskID] {
+			return fmt.Errorf("备份中任务 %s 的后续任务不在备份中", t.Name)
+		}
+	}
+	for _, s := range bf.Scripts {
+		if !validName(s.Name) {
+			return fmt.Errorf("备份中有无效脚本名: %s", s.Name)
+		}
+		// 只验 base64 可解: 总大小已由 decodeBackup 的读取上限卡住, 不再单设脚本上限,
+		// 避免应用自身写出的大脚本在导入时被拒。
+		if _, err := base64.StdEncoding.DecodeString(s.Content); err != nil {
+			return fmt.Errorf("备份中脚本 %s 内容无效", s.Name)
+		}
+	}
+	return nil
+}
+
+// normalizeAdvanced 把高级设置数值归一到现行规则, 返回是否改动过。
+// 老版本任务可能含超界值(典型如重试间隔 0, 运行时与编辑表单都按 30 秒处理);
+// 恢复时直接拒绝会让整份备份无法导入, 所以只修正数值, 不动任务结构。
+func normalizeAdvanced(t *Task) bool {
+	changed := false
+	if t.Retry < 0 {
+		t.Retry = 0
+		changed = true
+	}
+	if t.Retry > 5 {
+		t.Retry = 5
+		changed = true
+	}
+	if t.RetryInterval < 1 {
+		t.RetryInterval = 30
+		changed = true
+	}
+	if t.RetryInterval > 3600 {
+		t.RetryInterval = 3600
+		changed = true
+	}
+	if t.TimeoutSec < 0 {
+		t.TimeoutSec = 0
+		changed = true
+	}
+	if t.TimeoutSec > 86400 {
+		t.TimeoutSec = 86400
+		changed = true
+	}
+	return changed
+}
+
+// doImport 整包替换: 调用前须持有 mu, 且已通过 validateBackup 校验。
+// 脚本先写临时文件再逐个改名到位, 避免写一半时任务指向新旧混杂的内容。
+// 返回归一过高级设置的任务数。
+func doImport(bf *backupFile) (int, error) {
+	for _, t := range tasks {
+		if t.Running {
+			return 0, fmt.Errorf("有任务正在运行中, 请先停止后再导入")
+		}
+	}
+	oldScripts := map[string]bool{}
+	for _, t := range tasks {
+		if t.taskType() == TypeScript {
+			oldScripts[t.Name] = true
+		}
+	}
+	newNames := map[string]bool{}
+	for _, s := range bf.Scripts {
+		newNames[s.Name] = true
+	}
+	staged := []string{}
+	defer func() {
+		for _, p := range staged {
+			os.Remove(p)
+		}
+	}()
+	for _, s := range bf.Scripts {
+		b, _ := base64.StdEncoding.DecodeString(s.Content)
+		p := filepath.Join(scriptsDir, ".bak-tmp-"+s.Name)
+		if err := os.WriteFile(p, b, 0755); err != nil {
+			return 0, fmt.Errorf("写入脚本 %s 失败: %s", s.Name, err.Error())
+		}
+		staged = append(staged, p)
+	}
+	for _, s := range bf.Scripts {
+		if err := os.Rename(filepath.Join(scriptsDir, ".bak-tmp-"+s.Name), filepath.Join(scriptsDir, s.Name)); err != nil {
+			return 0, fmt.Errorf("恢复脚本 %s 失败: %s", s.Name, err.Error())
+		}
+	}
+	for name := range oldScripts {
+		if !newNames[name] {
+			os.Remove(filepath.Join(scriptsDir, name))
+		}
+	}
+	fixed := 0
+	for _, t := range bf.Tasks {
+		t.Running = false
+		if normalizeAdvanced(t) {
+			fixed++
+		}
+	}
+	tasks = bf.Tasks
+	if tasks == nil {
+		tasks = []*Task{}
+	}
+	settings = bf.Settings
+	if settings.LogKeepDays < 1 {
+		settings.LogKeepDays = 30
+	}
+	if settings.LogKeepDays > 3650 {
+		settings.LogKeepDays = 3650
+	}
+	firedSec = map[string]string{}
+	saveState()
+	saveSettings()
+	return fixed, nil
+}
+
+func validBackupName(n string) bool {
+	return strings.HasPrefix(n, "script-tasks-backup-") && strings.HasSuffix(n, ".json") &&
+		n == filepath.Base(n) && !strings.Contains(n, "..")
+}
+
+func listNASBackups() []map[string]any {
+	ents, _ := os.ReadDir(backupsDir)
+	out := []map[string]any{}
+	for _, e := range ents {
+		if e.IsDir() || !validBackupName(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, map[string]any{"name": e.Name(), "size": info.Size(), "modTime": info.ModTime().UnixMilli()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["modTime"].(int64) > out[j]["modTime"].(int64) })
+	return out
+}
+
+func decodeBackup(r io.Reader) (*backupFile, error) {
+	var bf backupFile
+	if err := json.NewDecoder(io.LimitReader(r, 128<<20)).Decode(&bf); err != nil {
+		return nil, fmt.Errorf("备份文件解析失败")
+	}
+	if err := validateBackup(&bf); err != nil {
+		return nil, err
+	}
+	return &bf, nil
+}
+
+func importErrCode(err error) int {
+	if strings.Contains(err.Error(), "运行中") {
+		return 409
+	}
+	return 500
+}
+
+func handleBackup(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/backup")
+	rest = strings.TrimPrefix(rest, "/")
+	switch rest {
+	case "export": // 导出到本地(浏览器下载)
+		if r.Method != http.MethodGet {
+			errJSON(w, 405, "method not allowed")
+			return
+		}
+		b, _ := json.MarshalIndent(buildBackup(), "", "  ")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+backupFileName()+"\"")
+		w.WriteHeader(200)
+		w.Write(b)
+	case "nas": // 列出 NAS 目录备份
+		if r.Method != http.MethodGet {
+			errJSON(w, 405, "method not allowed")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"files": listNASBackups()})
+	case "nas/export": // 导出到 NAS 目录(数据目录下 backups/)
+		if r.Method != http.MethodPost {
+			errJSON(w, 405, "method not allowed")
+			return
+		}
+		bf := buildBackup()
+		b, _ := json.MarshalIndent(bf, "", "  ")
+		name := backupFileName()
+		os.MkdirAll(backupsDir, 0755) // 运行中备份目录被删也能重建
+		if err := os.WriteFile(filepath.Join(backupsDir, name), b, 0644); err != nil {
+			errJSON(w, 500, "写入 NAS 备份失败: "+err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"file": name, "tasks": len(bf.Tasks), "scripts": len(bf.Scripts), "missing": bf.MissingScripts})
+	case "import": // 从本地上传导入
+		if r.Method != http.MethodPost {
+			errJSON(w, 405, "method not allowed")
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			errJSON(w, 400, "上传解析失败")
+			return
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			errJSON(w, 400, "没有文件")
+			return
+		}
+		defer file.Close()
+		bf, err := decodeBackup(file)
+		if err != nil {
+			errJSON(w, 400, err.Error())
+			return
+		}
+		mu.Lock()
+		fixed, err := doImport(bf)
+		mu.Unlock()
+		if err != nil {
+			errJSON(w, importErrCode(err), err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"tasks": len(bf.Tasks), "scripts": len(bf.Scripts), "fixed": fixed})
+	case "nas/import": // 从 NAS 目录选取导入
+		if r.Method != http.MethodPost {
+			errJSON(w, 405, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || !validBackupName(body.Name) {
+			errJSON(w, 400, "备份文件名无效")
+			return
+		}
+		f, err := os.Open(filepath.Join(backupsDir, body.Name))
+		if err != nil {
+			errJSON(w, 404, "NAS 上没有这个备份文件")
+			return
+		}
+		defer f.Close()
+		bf, err := decodeBackup(f)
+		if err != nil {
+			errJSON(w, 400, err.Error())
+			return
+		}
+		mu.Lock()
+		fixed, err := doImport(bf)
+		mu.Unlock()
+		if err != nil {
+			errJSON(w, importErrCode(err), err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"tasks": len(bf.Tasks), "scripts": len(bf.Scripts), "fixed": fixed})
+	case "nas/delete": // 删除 NAS 目录备份
+		if r.Method != http.MethodPost {
+			errJSON(w, 405, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || !validBackupName(body.Name) {
+			errJSON(w, 400, "备份文件名无效")
+			return
+		}
+		if err := os.Remove(filepath.Join(backupsDir, body.Name)); err != nil {
+			errJSON(w, 404, "NAS 上没有这个备份文件")
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	default:
+		errJSON(w, 404, "not found")
+	}
+}
+
 func handleCronPreview(w http.ResponseWriter, r *http.Request) {
 	expr := r.URL.Query().Get("expr")
 	ce, err := parseCron(expr)
@@ -1331,11 +1702,21 @@ func main() {
 	}
 	scriptsDir = filepath.Join(dataDir, "scripts")
 	logsDir = filepath.Join(dataDir, "logs")
+	backupsDir = filepath.Join(dataDir, "backups")
 	stateFile = filepath.Join(dataDir, "tasks.json")
 	runsFile = filepath.Join(dataDir, "runs.json")
 	settingFile = filepath.Join(dataDir, "settings.json")
 	os.MkdirAll(scriptsDir, 0755)
 	os.MkdirAll(logsDir, 0755)
+	os.MkdirAll(backupsDir, 0755)
+	// 清理上次导入异常中断残留的临时脚本文件
+	if ents, err := os.ReadDir(scriptsDir); err == nil {
+		for _, e := range ents {
+			if strings.HasPrefix(e.Name(), ".bak-tmp-") {
+				os.Remove(filepath.Join(scriptsDir, e.Name()))
+			}
+		}
+	}
 	loadState()
 	pruneOldLogs()
 
@@ -1361,6 +1742,8 @@ func main() {
 	mux.HandleFunc("/api/runs", handleRuns)
 	mux.HandleFunc("/api/runs/", handleRun)
 	mux.HandleFunc("/api/settings", handleSettings)
+	mux.HandleFunc("/api/backup", handleBackup)
+	mux.HandleFunc("/api/backup/", handleBackup)
 	mux.HandleFunc("/api/cron/preview", handleCronPreview)
 
 	go scheduler()
